@@ -1,0 +1,12 @@
+{
+  "name": "cloudshop",
+  "version": "1.0.0",
+  "description": "CloudShop DevOps E-Commerce Platform",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}
