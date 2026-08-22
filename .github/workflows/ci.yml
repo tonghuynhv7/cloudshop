@@ -27,3 +27,40 @@ jobs:
 
       - name: Verify application syntax
         run: node --check src/server.js
+
+      - name: Build and start Docker Compose stack
+        run: docker compose up -d --build
+
+      - name: Show Docker Compose status
+        run: docker compose ps
+
+      - name: Wait for CloudShop readiness
+        run: |
+          for i in {1..20}; do
+            if curl -fsS http://localhost/api/ready; then
+              echo "CloudShop is ready"
+              exit 0
+            fi
+
+            echo "Waiting for CloudShop... attempt $i/20"
+            sleep 3
+          done
+
+          echo "CloudShop failed to become ready"
+          docker compose ps
+          docker compose logs
+          exit 1
+
+      - name: Test health endpoint
+        run: curl -fsS http://localhost/api/health
+
+      - name: Test readiness endpoint
+        run: curl -fsS http://localhost/api/ready
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v
