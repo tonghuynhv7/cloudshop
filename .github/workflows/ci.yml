@@ -1,8 +1,9 @@
-name: Cloudshop CI
+name: CloudShop CI
 
 on:
   push:
-    - main:
+    branches:
+      - main
 
   pull_request:
     branches:
@@ -13,17 +14,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      - name: checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.jobs
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Install dependencies
-        run: npm CI
+        run: npm ci
 
       - name: Verify application syntax
         run: node --check src/server.js
