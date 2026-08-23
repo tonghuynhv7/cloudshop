@@ -63,3 +63,8 @@ app.get("/ready", async (req, res) => {
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`CloudShop API running on port ${PORT}`);
 });
+app.get("/version", (req, res) => {
+  res.json({
+    version: "1.0.0",
+  });
+});
