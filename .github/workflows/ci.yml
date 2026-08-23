@@ -1,4 +1,4 @@
-name: CloudShop CI
+name: Cloudshop CI
 
 on:
   push:
