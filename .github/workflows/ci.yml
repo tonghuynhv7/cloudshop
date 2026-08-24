@@ -1,6 +1,8 @@
-name: CloudShop CI   
+name: CloudShop CI
 
-# chạy pipeline khi push hoặc khi pull request vào main 
+# Pipeline chạy khi:
+# 1. Push code vào main
+# 2. Pull Request vào main
 on:
   push:
     branches:
@@ -10,42 +12,79 @@ on:
     branches:
       - main
 
+
 jobs:
 
-# kiểm tra sourcode + docker compose + health endpoint
+  # =========================================================
+  # JOB 1: TEST APPLICATION
+  # =========================================================
   test:
-  # jon test chỉ cần quyền đọc soucecode repository
+
+    # Job test chỉ cần quyền đọc source code
     permissions:
       contents: read
-   # github tao 1 ubuntu runner tam thoi de chay job
+
+    # GitHub tạo Ubuntu Runner tạm thời
     runs-on: ubuntu-latest
 
     steps:
 
-    # lay source code tu github repository
+      # -----------------------------------------------------
+      # 1. Lấy source code từ GitHub Repository
+      # -----------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
-# cai node-20 tren ubuntu runner
+
+
+      # -----------------------------------------------------
+      # 2. Cài Node.js 20 trên GitHub Runner
+      # -----------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-# cai dependencies dua chinh xac tren package-json 
+
+
+      # -----------------------------------------------------
+      # 3. Cài dependencies
+      # npm ci sử dụng package-lock.json
+      # -----------------------------------------------------
       - name: Install dependencies
         run: npm ci
-# kiem tra cu phap java script truoc khi build-container 
+
+
+      # -----------------------------------------------------
+      # 4. Kiểm tra syntax JavaScript
+      # -----------------------------------------------------
       - name: Verify application syntax
         run: node --check src/server.js
-# build va chay dockercompose 
+
+
+      # -----------------------------------------------------
+      # 5. Build Docker images và chạy Docker Compose
+      # -----------------------------------------------------
       - name: Build and start Docker Compose stack
         run: docker compose up -d --build
-# kie mtra trang thai cua docker compose  
+
+
+      # -----------------------------------------------------
+      # 6. Kiểm tra trạng thái containers
+      # -----------------------------------------------------
       - name: Show Docker Compose status
         run: docker compose ps
-# thu goi /api/ready toi da 20 lan moi lan that bai thi cho 3s , tong thoi gian toi da la 60s 
+
+
+      # -----------------------------------------------------
+      # 7. Chờ CloudShop sẵn sàng
+      #
+      # Thử tối đa 20 lần
+      # Mỗi lần cách nhau 3 giây
+      # Tổng thời gian tối đa khoảng 60 giây
+      # -----------------------------------------------------
       - name: Wait for CloudShop readiness
         run: |
           for i in {1..20}; do
+
             if curl -fsS http://localhost/api/ready; then
               echo "CloudShop is ready"
               exit 0
@@ -53,53 +92,141 @@ jobs:
 
             echo "Waiting for CloudShop... attempt $i/20"
             sleep 3
+
           done
 
           echo "CloudShop failed to become ready"
+
           docker compose ps
           docker compose logs
+
           exit 1
 
+
+      # -----------------------------------------------------
+      # 8. Test health endpoint
+      # -----------------------------------------------------
       - name: Test health endpoint
         run: curl -fsS http://localhost/api/health
 
+
+      # -----------------------------------------------------
+      # 9. Test readiness endpoint
+      # -----------------------------------------------------
       - name: Test readiness endpoint
         run: curl -fsS http://localhost/api/ready
 
+
+      # -----------------------------------------------------
+      # 10. Nếu job lỗi thì hiển thị logs
+      # -----------------------------------------------------
       - name: Show logs on failure
         if: failure()
         run: docker compose logs
 
+
+      # -----------------------------------------------------
+      # 11. Cleanup
+      #
+      # always() = dù test pass hay fail vẫn cleanup
+      # -----------------------------------------------------
       - name: Cleanup
         if: always()
         run: docker compose down -v
 
-# chi chay khi even la push va dong thoi la nhanh main va can jobs test da thanh cong 
+
+
+  # =========================================================
+  # JOB 2: AWS OIDC AUTHENTICATION
+  # =========================================================
   aws-auth:
+
+    # Chỉ authenticate AWS khi:
+    # - event là push
+    # - branch là main
+    #
+    # Pull Request chỉ chạy job test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
+    # Job test phải thành công trước
     needs: test
 
+
+    # -------------------------------------------------------
+    # Quyền GitHub Actions
+    # -------------------------------------------------------
     permissions:
-    # cho phep github action yeu cau OIDC ID TOken 
+
+      # Cho phép GitHub Actions xin OIDC ID Token
       id-token: write
-    # cho phep doc repository
+
+      # Cho phép workflow đọc repository
       contents: read
+
 
     runs-on: ubuntu-latest
 
     steps:
 
-    # AWS OIDC Authentication 
-    # khong luu aws_access_key_secret trong github-action 
-    # github tao oidc token - AWS STS  xac minh 
-    # cho runner assume iam role 
+
+      # -----------------------------------------------------
+      # 1. Debug GitHub OIDC information
+      #
+      # Tạm thời dùng để lấy:
+      # repository
+      # repository_id
+      # owner
+      # owner_id
+      # branch/ref
+      #
+      # Sau khi OIDC chạy ổn có thể xóa step này
+      # -----------------------------------------------------
+      - name: Show GitHub OIDC information
+        run: |
+          echo "repository=${{ github.repository }}"
+          echo "repository_id=${{ github.repository_id }}"
+          echo "repository_owner=${{ github.repository_owner }}"
+          echo "repository_owner_id=${{ github.repository_owner_id }}"
+          echo "ref=${{ github.ref }}"
+
+
+      # -----------------------------------------------------
+      # 2. AWS OIDC Authentication
+      #
+      # GitHub
+      #   ↓
+      # OIDC JWT
+      #   ↓
+      # AWS STS
+      #   ↓
+      # Assume CloudShopGitHubActionsRole
+      #   ↓
+      # Temporary AWS credentials
+      #
+      # Không sử dụng AWS Access Key trong GitHub Secrets
+      # -----------------------------------------------------
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
         with:
-        # i am role mà github action được phép assume 
+
+          # IAM Role mà GitHub Actions được phép assume
           role-to-assume: arn:aws:iam::610331149330:role/CloudShopGitHubActionsRole
+
+          # Region CloudShop hiện tại
           aws-region: ap-southeast-1
-        # kiem tra runner hien tai dang su dung AWS identity nao
+
+          # Trong lúc debug chỉ thử 2 lần
+          # để tránh "Assuming role with OIDC" quá lâu
+          retry-max-attempts: 2
+
+
+      # -----------------------------------------------------
+      # 3. Kiểm tra AWS identity
+      #
+      # Nếu OIDC thành công sẽ thấy:
+      #
+      # arn:aws:sts::<ACCOUNT_ID>:
+      # assumed-role/CloudShopGitHubActionsRole/...
+      # -----------------------------------------------------
       - name: Verify AWS identity
         run: aws sts get-caller-identity
