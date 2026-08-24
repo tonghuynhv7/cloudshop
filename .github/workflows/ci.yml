@@ -230,3 +230,25 @@ jobs:
       # -----------------------------------------------------
       - name: Verify AWS identity
         run: aws sts get-caller-identity
+      - name: login to amazon ecr 
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: build docker image
+        env: 
+          ECR_REGISTRY: ${{steps.login-ecr.outputs.registry}}
+          ECR_REPOSITORY: cloudshop-api
+          IMAGE_TAG: ${{github.sha}}
+        run: |
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            .
+      - name: push docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: cloudshop-api
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
