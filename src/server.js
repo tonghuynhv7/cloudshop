@@ -4,24 +4,41 @@ const { createClient } = require("redis");
 
 const app = express();
 
-const PORT = process.env.PORT || 3000;
+app.use(express.json());
 
-// =========================
+const PORT = Number(process.env.PORT) || 3000;
+
+// =====================================================
 // PostgreSQL
-// =========================
+// =====================================================
+
 const pool = new Pool({
   host: process.env.DB_HOST || "localhost",
   port: Number(process.env.DB_PORT) || 5432,
   database: process.env.DB_NAME || "cloudshop",
   user: process.env.DB_USER || "clouduser",
   password: process.env.DB_PASSWORD || "cloudpass",
+
+  // Local PostgreSQL: DB_SSL=false
+  // AWS RDS: DB_SSL=true
+  ssl:
+    process.env.DB_SSL === "true"
+      ? {
+          rejectUnauthorized: false,
+        }
+      : false,
 });
 
-// =========================
+pool.on("error", (err) => {
+  console.error("PostgreSQL pool error:", err.message);
+});
+
+// =====================================================
 // Redis
-// =========================
-// Phase hiện tại trên AWS chưa có ElastiCache,
-// nên chỉ tạo Redis client khi REDIS_HOST được cấu hình.
+// =====================================================
+
+// Redis chưa triển khai trên AWS thì không set REDIS_HOST.
+// Khi triển khai ElastiCache sau này chỉ cần thêm REDIS_HOST.
 let redisClient = null;
 
 if (process.env.REDIS_HOST) {
@@ -36,38 +53,44 @@ if (process.env.REDIS_HOST) {
   });
 }
 
-// =========================
+// =====================================================
 // Routes
-// =========================
+// =====================================================
 
+// Root endpoint
 app.get("/", (req, res) => {
-  res.json({
+  res.status(200).json({
     service: "cloudshop-api",
     status: "running",
   });
 });
 
-// Liveness check
-// Dùng cho ALB Health Check
+// -----------------------------------------------------
+// Liveness health check
+// -----------------------------------------------------
+// ALB dùng endpoint này.
+// Không phụ thuộc PostgreSQL/Redis.
 app.get("/health", (req, res) => {
   res.status(200).json({
     status: "healthy",
   });
 });
 
+// -----------------------------------------------------
 // PostgreSQL health check
-// Dùng để test ECS -> RDS
+// -----------------------------------------------------
+// Dùng để chứng minh ECS -> RDS hoạt động.
 app.get("/db-health", async (req, res) => {
   try {
-    const result = await pool.query("SELECT NOW()");
+    const result = await pool.query("SELECT NOW() AS current_time");
 
     res.status(200).json({
       status: "healthy",
       database: "connected",
-      time: result.rows[0].now,
+      time: result.rows[0].current_time,
     });
   } catch (error) {
-    console.error("Database error:", error.message);
+    console.error("Database health check failed:", error.message);
 
     res.status(503).json({
       status: "unhealthy",
@@ -77,7 +100,11 @@ app.get("/db-health", async (req, res) => {
   }
 });
 
+// -----------------------------------------------------
 // Readiness check
+// -----------------------------------------------------
+// PostgreSQL bắt buộc.
+// Redis chỉ được kiểm tra nếu REDIS_HOST đã được cấu hình.
 app.get("/ready", async (req, res) => {
   try {
     // Check PostgreSQL
@@ -85,13 +112,14 @@ app.get("/ready", async (req, res) => {
 
     let redisStatus = "not-configured";
 
-    // Chỉ check Redis nếu AWS/local đã cấu hình REDIS_HOST
+    // Check Redis only if configured
     if (redisClient) {
       if (!redisClient.isOpen) {
         await redisClient.connect();
       }
 
       await redisClient.ping();
+
       redisStatus = "connected";
     }
 
@@ -104,21 +132,62 @@ app.get("/ready", async (req, res) => {
     console.error("Readiness check failed:", error.message);
 
     res.status(503).json({
-      status: "not ready",
+      status: "not-ready",
       error: error.message,
     });
   }
 });
 
+// -----------------------------------------------------
+// Version endpoint
+// -----------------------------------------------------
 app.get("/version", (req, res) => {
-  res.json({
+  res.status(200).json({
+    service: "cloudshop-api",
     version: "1.0.0",
   });
 });
 
-// =========================
-// Start server
-// =========================
-app.listen(PORT, "0.0.0.0", () => {
+// =====================================================
+// Start Server
+// =====================================================
+
+const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`CloudShop API running on port ${PORT}`);
 });
+
+// =====================================================
+// Graceful Shutdown
+// =====================================================
+
+// ECS gửi SIGTERM khi:
+// - rolling deployment
+// - scale-in
+// - task replacement
+//
+// App sẽ đóng connection sạch sẽ trước khi container dừng.
+
+async function shutdown(signal) {
+  console.log(`${signal} received. Shutting down gracefully...`);
+
+  server.close(async () => {
+    try {
+      await pool.end();
+      console.log("PostgreSQL pool closed.");
+
+      if (redisClient && redisClient.isOpen) {
+        await redisClient.quit();
+        console.log("Redis connection closed.");
+      }
+
+      console.log("CloudShop API stopped.");
+      process.exit(0);
+    } catch (error) {
+      console.error("Shutdown error:", error.message);
+      process.exit(1);
+    }
+  });
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
