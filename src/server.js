@@ -1,6 +1,6 @@
 import express from "express";
 import pg from "pg";
-import { createCluster } from "redis";
+import { createClient, createCluster } from "redis";
 
 const { Pool } = pg;
 
@@ -20,9 +20,19 @@ const DB_NAME = process.env.DB_NAME;
 const DB_USER = process.env.DB_USER;
 const DB_PASSWORD = process.env.DB_PASSWORD;
 
-// Valkey
+// Redis / Valkey
 const REDIS_HOST = process.env.REDIS_HOST;
 const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
+
+// Local/CI mặc định:
+// REDIS_MODE=standalone
+// REDIS_TLS=false
+//
+// AWS ECS:
+// REDIS_MODE=cluster
+// REDIS_TLS=true
+const REDIS_MODE = process.env.REDIS_MODE || "standalone";
+const REDIS_TLS = process.env.REDIS_TLS === "true";
 
 // =====================================================
 // 2. POSTGRESQL CONNECTION POOL
@@ -45,45 +55,94 @@ pool.on("error", (err) => {
 });
 
 // =====================================================
-// 3. VALKEY / REDIS CLUSTER
+// 3. REDIS / VALKEY CONNECTION
 //
-// AWS ElastiCache:
-// Cluster mode: Enabled
-// Transit encryption: Required
+// LOCAL / CI:
+// Redis standalone
+// redis://redis:6379
 //
-// => createCluster()
-// => rediss://
+// AWS:
+// ElastiCache Valkey
+// Cluster Mode Enabled
+// TLS Required
+// rediss://...
 // =====================================================
 
-const redisClient = createCluster({
-  rootNodes: [
-    {
-      url: `rediss://${REDIS_HOST}:${REDIS_PORT}`,
-    },
-  ],
+let redisClient;
 
-  defaults: {
+if (REDIS_MODE === "cluster") {
+  // AWS ElastiCache Valkey Cluster
+  redisClient = createCluster({
+    rootNodes: [
+      {
+        url: `${REDIS_TLS ? "rediss" : "redis"}://${REDIS_HOST}:${REDIS_PORT}`,
+      },
+    ],
+
+    defaults: {
+      socket: {
+        connectTimeout: 5000,
+
+        reconnectStrategy: (retries) => {
+          if (retries > 10) {
+            return new Error("Valkey reconnect limit reached");
+          }
+
+          return Math.min(retries * 500, 3000);
+        },
+      },
+    },
+  });
+
+  console.log(
+    `Redis mode: CLUSTER (${REDIS_TLS ? "TLS" : "no TLS"})`
+  );
+} else {
+  // Local Docker Compose Redis
+  redisClient = createClient({
+    url: `${REDIS_TLS ? "rediss" : "redis"}://${REDIS_HOST}:${REDIS_PORT}`,
+
     socket: {
       connectTimeout: 5000,
 
       reconnectStrategy: (retries) => {
         if (retries > 10) {
-          return new Error("Valkey reconnect limit reached");
+          return new Error("Redis reconnect limit reached");
         }
 
         return Math.min(retries * 500, 3000);
       },
     },
-  },
-});
+  });
+
+  console.log(
+    `Redis mode: STANDALONE (${REDIS_TLS ? "TLS" : "no TLS"})`
+  );
+}
 
 redisClient.on("error", (err) => {
-  console.error("Valkey cluster error:", err.message);
+  console.error("Redis/Valkey error:", err.message);
 });
 
 redisClient.on("ready", () => {
-  console.log("Valkey cluster ready");
+  console.log("Redis/Valkey ready");
 });
+
+// =====================================================
+// Redis close helper
+// =====================================================
+
+async function closeRedis() {
+  try {
+    if (REDIS_MODE === "cluster") {
+      await redisClient.close();
+    } else if (redisClient.isOpen) {
+      await redisClient.quit();
+    }
+  } catch (error) {
+    console.error("Redis close error:", error.message);
+  }
+}
 
 // =====================================================
 // 4. ROOT
@@ -101,7 +160,7 @@ app.get("/", (req, res) => {
 // 5. LIVENESS
 //
 // Chỉ kiểm tra Node.js process.
-// Không phụ thuộc RDS / Valkey.
+// Không phụ thuộc PostgreSQL / Redis.
 // =====================================================
 
 app.get("/health", (req, res) => {
@@ -116,9 +175,9 @@ app.get("/health", (req, res) => {
 // =====================================================
 // 6. READINESS
 //
-// Application chỉ READY khi:
+// Application READY khi:
 // PostgreSQL OK
-// Valkey OK
+// Redis / Valkey OK
 // =====================================================
 
 app.get("/ready", async (req, res) => {
@@ -132,11 +191,11 @@ app.get("/ready", async (req, res) => {
     await pool.query("SELECT 1");
     checks.database = "connected";
 
-    // Valkey
+    // Redis / Valkey
     const pong = await redisClient.ping();
 
     if (pong !== "PONG") {
-      throw new Error("Valkey PING failed");
+      throw new Error("Redis/Valkey PING failed");
     }
 
     checks.redis = "connected";
@@ -187,7 +246,7 @@ app.get("/db-test", async (req, res) => {
 });
 
 // =====================================================
-// 8. VALKEY TEST
+// 8. REDIS / VALKEY TEST
 //
 // PING
 // SET
@@ -218,7 +277,7 @@ app.get("/redis-test", async (req, res) => {
       ttl,
     });
   } catch (error) {
-    console.error("Valkey test failed:", error.message);
+    console.error("Redis/Valkey test failed:", error.message);
 
     return res.status(500).json({
       status: "error",
@@ -234,21 +293,20 @@ app.get("/redis-test", async (req, res) => {
 // Request
 //    |
 //    v
-// Redis
-//   |
-//   +-- HIT --> response
-//   |
-//   +-- MISS
-//        |
-//        v
-//       RDS
-//        |
-//        v
+// Redis / Valkey
+//    |
+//    +-- HIT --> response
+//    |
+//    +-- MISS
+//         |
+//         v
+//        RDS
+//         |
+//         v
 //    cache result
-//        |
-//        v
-//     response
-//
+//         |
+//         v
+//      response
 // =====================================================
 
 app.get("/cache-demo", async (req, res) => {
@@ -256,7 +314,7 @@ app.get("/cache-demo", async (req, res) => {
 
   try {
     // -------------------------------------------------
-    // Step 1: Try cache
+    // STEP 1: Check cache
     // -------------------------------------------------
 
     const cachedData = await redisClient.get(cacheKey);
@@ -271,7 +329,7 @@ app.get("/cache-demo", async (req, res) => {
     }
 
     // -------------------------------------------------
-    // Step 2: Cache MISS -> query RDS
+    // STEP 2: Cache MISS -> PostgreSQL
     // -------------------------------------------------
 
     const dbResult = await pool.query(`
@@ -283,9 +341,7 @@ app.get("/cache-demo", async (req, res) => {
     const data = dbResult.rows[0];
 
     // -------------------------------------------------
-    // Step 3: Store result in Valkey
-    //
-    // Cache 30 seconds
+    // STEP 3: Cache result for 30 seconds
     // -------------------------------------------------
 
     await redisClient.set(
@@ -313,7 +369,7 @@ app.get("/cache-demo", async (req, res) => {
 });
 
 // =====================================================
-// 10. CACHE DELETE TEST
+// 10. DELETE CACHE DEMO
 // =====================================================
 
 app.delete("/cache-demo", async (req, res) => {
@@ -380,7 +436,7 @@ async function startServer() {
     }
 
     // -------------------------------------------------
-    // PostgreSQL connection test
+    // PostgreSQL
     // -------------------------------------------------
 
     console.log("Testing PostgreSQL connection...");
@@ -390,21 +446,21 @@ async function startServer() {
     console.log("PostgreSQL connected");
 
     // -------------------------------------------------
-    // Valkey cluster connection
+    // Redis / Valkey
     // -------------------------------------------------
 
     console.log(
-      `Connecting to Valkey cluster ${REDIS_HOST}:${REDIS_PORT}...`
+      `Connecting to Redis/Valkey ${REDIS_HOST}:${REDIS_PORT}...`
     );
 
     await redisClient.connect();
 
     const pong = await redisClient.ping();
 
-    console.log(`Valkey response: ${pong}`);
+    console.log(`Redis/Valkey response: ${pong}`);
 
     // -------------------------------------------------
-    // Start Express
+    // Express
     // -------------------------------------------------
 
     server = app.listen(PORT, "0.0.0.0", () => {
@@ -415,10 +471,7 @@ async function startServer() {
     console.error("Application startup failed:", error);
 
     try {
-      if (redisClient.isOpen) {
-        await redisClient.close();
-      }
-
+      await closeRedis();
       await pool.end();
     } catch (cleanupError) {
       console.error("Cleanup error:", cleanupError);
@@ -433,23 +486,23 @@ startServer();
 // =====================================================
 // 13. GRACEFUL SHUTDOWN
 //
-// ECS stops task
+// ECS Task stop
 //      |
 //      v
 //   SIGTERM
 //      |
-//      +--> stop HTTP
-//      |
-//      +--> close Valkey
-//      |
-//      +--> close PostgreSQL
+//      +--> HTTP server
+//      +--> Redis / Valkey
+//      +--> PostgreSQL
 //      |
 //      v
 //     exit
 // =====================================================
 
 async function shutdown(signal) {
-  console.log(`${signal} received. Starting graceful shutdown...`);
+  console.log(
+    `${signal} received. Starting graceful shutdown...`
+  );
 
   try {
     if (server) {
@@ -460,11 +513,9 @@ async function shutdown(signal) {
       console.log("HTTP server closed");
     }
 
-    if (redisClient.isOpen) {
-      await redisClient.close();
+    await closeRedis();
 
-      console.log("Valkey connection closed");
-    }
+    console.log("Redis/Valkey connection closed");
 
     await pool.end();
 
