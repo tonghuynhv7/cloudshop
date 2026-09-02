@@ -1,29 +1,12 @@
 services:
-
   api:
     build:
       context: .
       dockerfile: Dockerfile
 
-    container_name: cloudshop-api
-
     environment:
       PORT: 3000
-
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: cloudshop
-      DB_USER: clouduser
-      DB_PASSWORD: cloudpass
-
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      NODE_ENV: production
 
     expose:
       - "3000"
@@ -34,7 +17,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+          "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
         ]
       interval: 10s
       timeout: 5s
@@ -44,51 +27,8 @@ services:
     networks:
       - cloudshop-net
 
-
-  postgres:
-    image: postgres:16-alpine
-
-    container_name: cloudshop-postgres
-
-    environment:
-      POSTGRES_DB: cloudshop
-      POSTGRES_USER: clouduser
-      POSTGRES_PASSWORD: cloudpass
-
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U clouduser -d cloudshop"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-      start_period: 5s
-
-    networks:
-      - cloudshop-net
-
-
-  redis:
-    image: redis:7-alpine
-
-    container_name: cloudshop-redis
-
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
-
-    networks:
-      - cloudshop-net
-
-
   nginx:
     image: nginx:alpine
-
-    container_name: cloudshop-nginx
 
     ports:
       - "80:80"
@@ -100,13 +40,6 @@ services:
       api:
         condition: service_healthy
 
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 5s
-
     networks:
       - cloudshop-net
 
@@ -114,7 +47,3 @@ services:
 networks:
   cloudshop-net:
     driver: bridge
-
-
-volumes:
-  postgres-data:

@@ -24,7 +24,7 @@ app.get("/health", (req, res) => {
   });
 });
 
-app.get("/api/ready", (req, res) => {
+app.get("/ready", (req, res) => {
   res.json({
     status: "ready"
   });
