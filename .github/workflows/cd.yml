@@ -1,0 +1,179 @@
+name: CloudShop CD
+
+# =========================================================
+# CD chỉ chạy sau khi workflow "CloudShop CI" hoàn thành
+# =========================================================
+on:
+  workflow_run:
+    workflows:
+      - "CloudShop CI"
+    types:
+      - completed
+
+
+jobs:
+
+  deploy:
+
+    # Chỉ deploy khi:
+    # 1. CI thành công
+    # 2. CI được chạy từ branch main
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+
+    runs-on: ubuntu-latest
+
+
+    # =====================================================
+    # GitHub permissions
+    # =====================================================
+    permissions:
+      contents: read
+      id-token: write
+
+
+    steps:
+
+      # ---------------------------------------------------
+      # 1. Checkout đúng commit vừa được CI test
+      # ---------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+
+      # ---------------------------------------------------
+      # 2. Authenticate AWS bằng GitHub OIDC
+      # ---------------------------------------------------
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::610331149330:role/CloudShopGitHubActionsRole
+          aws-region: ap-southeast-1
+
+
+      # ---------------------------------------------------
+      # 3. Login Amazon ECR
+      # ---------------------------------------------------
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+
+      # ---------------------------------------------------
+      # 4. Build Docker image
+      #
+      # Tag = commit SHA đã được CI test
+      # ---------------------------------------------------
+      - name: Build Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: cloudshop-api
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            .
+
+
+      # ---------------------------------------------------
+      # 5. Push image lên ECR
+      # ---------------------------------------------------
+      - name: Push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: cloudshop-api
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          docker push \
+            $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+
+      # ---------------------------------------------------
+      # 6. Lấy Task Definition mà ECS Service đang dùng
+      # ---------------------------------------------------
+      - name: Get current ECS task definition
+        run: |
+          TASK_DEFINITION_ARN=$(aws ecs describe-services \
+            --cluster cloudshop-cluster \
+            --services cloudshop-api-service \
+            --query "services[0].taskDefinition" \
+            --output text)
+
+          echo "Current task definition: $TASK_DEFINITION_ARN"
+
+          aws ecs describe-task-definition \
+            --task-definition "$TASK_DEFINITION_ARN" \
+            --query "taskDefinition" \
+            > task-definition.json
+
+
+      # ---------------------------------------------------
+      # 7. Thay image cũ bằng image vừa push
+      #    và tạo Task Definition revision mới
+      # ---------------------------------------------------
+      - name: Register new ECS task definition
+        id: task-definition
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: cloudshop-api
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          echo "Deploying image: $IMAGE_URI"
+
+          jq --arg IMAGE "$IMAGE_URI" '
+            del(
+              .taskDefinitionArn,
+              .revision,
+              .status,
+              .requiresAttributes,
+              .compatibilities,
+              .registeredAt,
+              .registeredBy
+            )
+            |
+            .containerDefinitions |= map(
+              if .name == "cloudshop-api"
+              then .image = $IMAGE
+              else .
+              end
+            )
+          ' task-definition.json > new-task-definition.json
+
+          NEW_TASK_DEFINITION_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-definition.json \
+            --query "taskDefinition.taskDefinitionArn" \
+            --output text)
+
+          echo "New task definition:"
+          echo "$NEW_TASK_DEFINITION_ARN"
+
+          echo "task_definition_arn=$NEW_TASK_DEFINITION_ARN" \
+            >> "$GITHUB_OUTPUT"
+
+
+      # ---------------------------------------------------
+      # 8. Update ECS Service
+      # ---------------------------------------------------
+      - name: Deploy to ECS
+        run: |
+          aws ecs update-service \
+            --cluster cloudshop-cluster \
+            --service cloudshop-api-service \
+            --task-definition "${{ steps.task-definition.outputs.task_definition_arn }}"
+
+
+      # ---------------------------------------------------
+      # 9. Chờ rolling deployment hoàn tất
+      # ---------------------------------------------------
+      - name: Wait for ECS service stability
+        run: |
+          aws ecs wait services-stable \
+            --cluster cloudshop-cluster \
+            --services cloudshop-api-service
+
+          echo "CloudShop deployment successful"
