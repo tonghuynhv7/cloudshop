@@ -1,8 +1,5 @@
 name: CloudShop CI
 
-# CI chạy khi:
-# 1. Push code vào main
-# 2. Pull Request vào main
 on:
   push:
     branches:
@@ -35,55 +32,63 @@ jobs:
 
 
       # -----------------------------------------------------
-      # 2. Setup Node.js
+      # 2. Setup Node.js for backend
       # -----------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
 
 
       # -----------------------------------------------------
-      # 3. Install dependencies
+      # 3. Install backend dependencies
       # -----------------------------------------------------
-      - name: Install dependencies
+      - name: Install backend dependencies
         run: npm ci
 
 
       # -----------------------------------------------------
-      # 4. Verify JavaScript syntax
+      # 4. Verify backend JavaScript syntax
       # -----------------------------------------------------
-      - name: Verify application syntax
+      - name: Verify backend syntax
         run: node --check src/server.js
 
 
       # -----------------------------------------------------
-      # 5. Build and start Docker Compose
+      # 5. Validate Docker Compose configuration
+      # -----------------------------------------------------
+      - name: Validate Docker Compose
+        run: docker compose config
+
+
+      # -----------------------------------------------------
+      # 6. Build and start complete CloudShop stack
       # -----------------------------------------------------
       - name: Build and start Docker Compose stack
         run: docker compose up -d --build
 
 
       # -----------------------------------------------------
-      # 6. Show container status
+      # 7. Show container status
       # -----------------------------------------------------
       - name: Show Docker Compose status
         run: docker compose ps
 
 
       # -----------------------------------------------------
-      # 7. Wait for application readiness
+      # 8. Wait for CloudShop readiness
       # -----------------------------------------------------
       - name: Wait for CloudShop readiness
         run: |
-          for i in {1..20}; do
+          for i in {1..30}; do
 
             if curl -fsS http://localhost/api/ready; then
               echo "CloudShop is ready"
               exit 0
             fi
 
-            echo "Waiting for CloudShop... attempt $i/20"
+            echo "Waiting for CloudShop... attempt $i/30"
             sleep 3
 
           done
@@ -91,35 +96,46 @@ jobs:
           echo "CloudShop failed to become ready"
 
           docker compose ps
-          docker compose logs
+          docker compose logs --no-color
 
           exit 1
 
 
       # -----------------------------------------------------
-      # 8. Test health endpoint
+      # 9. Test frontend
+      # -----------------------------------------------------
+      - name: Test frontend
+        run: |
+          curl -fsS http://localhost > /dev/null
+          echo "Frontend is reachable"
+
+
+      # -----------------------------------------------------
+      # 10. Test backend health endpoint
       # -----------------------------------------------------
       - name: Test health endpoint
         run: curl -fsS http://localhost/api/health
 
 
       # -----------------------------------------------------
-      # 9. Test readiness endpoint
+      # 11. Test backend readiness endpoint
       # -----------------------------------------------------
       - name: Test readiness endpoint
         run: curl -fsS http://localhost/api/ready
 
 
       # -----------------------------------------------------
-      # 10. Show logs if CI fails
+      # 12. Show logs if CI fails
       # -----------------------------------------------------
       - name: Show logs on failure
         if: failure()
-        run: docker compose logs
+        run: |
+          docker compose ps
+          docker compose logs --no-color
 
 
       # -----------------------------------------------------
-      # 11. Cleanup
+      # 13. Cleanup
       # -----------------------------------------------------
       - name: Cleanup
         if: always()
