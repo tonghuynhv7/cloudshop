@@ -95,7 +95,7 @@ function App() {
           <div className="hero-glow hero-glow-one"></div>
           <div className="hero-glow hero-glow-two"></div>
 
-          <p className="eyebrow">AWS CLOUD E-COMMERCE DEMO</p>
+          <p className="eyebrow">AWS CLOUD E-COMMERCE DEMO VIP</p>
 
           <h1>
             Modern shopping.
