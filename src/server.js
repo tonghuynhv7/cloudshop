@@ -1,10 +1,15 @@
 const express = require("express");
-
+const cors = require("cors");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
 
+app.use(express.json());
+app.use(
+  cors({
+    origin: "https://tonghuynh.me"
+  })
+);
 const products = [
   { id: 1, name: "Laptop", price: 20000000 },
   { id: 2, name: "Keyboard", price: 1500000 },
