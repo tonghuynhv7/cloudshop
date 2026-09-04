@@ -5,17 +5,38 @@ function App() {
   const [products, setProducts] = useState([]);
   const [status, setStatus] = useState("checking");
 
-  useEffect(() => {
-    fetch("/api/health")
-      .then((res) => res.json())
-      .then((data) => setStatus(data.status))
-      .catch(() => setStatus("offline"));
+  const API_URL = import.meta.env.VITE_API_URL;
 
-    fetch("/api/products")
-      .then((res) => res.json())
-      .then((data) => setProducts(data))
-      .catch((err) => console.error("Failed to load products:", err));
-  }, []);
+  useEffect(() => {
+    fetch(`${API_URL}/health`)
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error("Health check failed");
+        }
+        return res.json();
+      })
+      .then((data) => {
+        setStatus(data.status);
+      })
+      .catch((err) => {
+        console.error("API health check failed:", err);
+        setStatus("offline");
+      });
+
+    fetch(`${API_URL}/products`)
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error("Failed to load products");
+        }
+        return res.json();
+      })
+      .then((data) => {
+        setProducts(data);
+      })
+      .catch((err) => {
+        console.error("Failed to load products:", err);
+      });
+  }, [API_URL]);
 
   const getProductIcon = (name) => {
     const productName = name.toLowerCase();
@@ -29,7 +50,6 @@ function App() {
 
   return (
     <div className="app">
-      {/* ================= NAVBAR ================= */}
       <header className="navbar">
         <a href="#home" className="brand">
           <div className="logo">C</div>
@@ -71,7 +91,6 @@ function App() {
       </header>
 
       <main>
-        {/* ================= HERO ================= */}
         <section className="hero" id="home">
           <div className="hero-glow hero-glow-one"></div>
           <div className="hero-glow hero-glow-two"></div>
@@ -116,22 +135,23 @@ function App() {
           </div>
         </section>
 
-        {/* ================= INFRA STATUS ================= */}
         <section className="infra-grid">
           <div className="infra-card">
             <div className="infra-icon green">●</div>
-
             <div>
               <p>Production</p>
               <strong>
-                {status === "healthy" ? "Healthy" : "Checking"}
+                {status === "healthy"
+                  ? "Healthy"
+                  : status === "offline"
+                  ? "Offline"
+                  : "Checking"}
               </strong>
             </div>
           </div>
 
           <div className="infra-card">
             <div className="infra-icon">☁</div>
-
             <div>
               <p>Deployment</p>
               <strong>ECS Fargate</strong>
@@ -140,7 +160,6 @@ function App() {
 
           <div className="infra-card">
             <div className="infra-icon">↻</div>
-
             <div>
               <p>CI / CD</p>
               <strong>GitHub Actions</strong>
@@ -149,7 +168,6 @@ function App() {
 
           <div className="infra-card">
             <div className="infra-icon">⌖</div>
-
             <div>
               <p>AWS Region</p>
               <strong>ap-southeast-1</strong>
@@ -157,7 +175,6 @@ function App() {
           </div>
         </section>
 
-        {/* ================= PRODUCTS ================= */}
         <section className="products-section" id="products">
           <div className="section-header">
             <div>
@@ -187,7 +204,9 @@ function App() {
                 </div>
 
                 <div className="product-content">
-                  <p className="product-category">CLOUDSHOP PRODUCT</p>
+                  <p className="product-category">
+                    CLOUDSHOP PRODUCT
+                  </p>
 
                   <h3>{product.name}</h3>
 
@@ -206,7 +225,6 @@ function App() {
           </div>
         </section>
 
-        {/* ================= PROJECT INFO ================= */}
         <section className="project-section">
           <div className="project-text">
             <p className="eyebrow">ABOUT THE PROJECT</p>
@@ -266,7 +284,6 @@ function App() {
         </section>
       </main>
 
-      {/* ================= FOOTER ================= */}
       <footer className="footer">
         <div className="footer-brand">
           <div className="footer-logo">C</div>
