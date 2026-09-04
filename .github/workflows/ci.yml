@@ -32,13 +32,16 @@ jobs:
 
 
       # -----------------------------------------------------
-      # 2. Setup Node.js for backend
+      # 2. Setup Node.js
       # -----------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
 
 
       # -----------------------------------------------------
@@ -56,28 +59,42 @@ jobs:
 
 
       # -----------------------------------------------------
-      # 5. Validate Docker Compose configuration
+      # 5. Install frontend dependencies
+      # -----------------------------------------------------
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+
+
+      # -----------------------------------------------------
+      # 6. Build React frontend
+      # -----------------------------------------------------
+      - name: Build frontend
+        run: npm run build --prefix frontend
+
+
+      # -----------------------------------------------------
+      # 7. Validate Docker Compose configuration
       # -----------------------------------------------------
       - name: Validate Docker Compose
         run: docker compose config
 
 
       # -----------------------------------------------------
-      # 6. Build and start complete CloudShop stack
+      # 8. Build and start complete CloudShop stack
       # -----------------------------------------------------
       - name: Build and start Docker Compose stack
         run: docker compose up -d --build
 
 
       # -----------------------------------------------------
-      # 7. Show container status
+      # 9. Show container status
       # -----------------------------------------------------
       - name: Show Docker Compose status
         run: docker compose ps
 
 
       # -----------------------------------------------------
-      # 8. Wait for CloudShop readiness
+      # 10. Wait for CloudShop readiness
       # -----------------------------------------------------
       - name: Wait for CloudShop readiness
         run: |
@@ -102,7 +119,7 @@ jobs:
 
 
       # -----------------------------------------------------
-      # 9. Test frontend
+      # 11. Test frontend
       # -----------------------------------------------------
       - name: Test frontend
         run: |
@@ -111,21 +128,28 @@ jobs:
 
 
       # -----------------------------------------------------
-      # 10. Test backend health endpoint
+      # 12. Test backend health endpoint
       # -----------------------------------------------------
       - name: Test health endpoint
         run: curl -fsS http://localhost/api/health
 
 
       # -----------------------------------------------------
-      # 11. Test backend readiness endpoint
+      # 13. Test backend readiness endpoint
       # -----------------------------------------------------
       - name: Test readiness endpoint
         run: curl -fsS http://localhost/api/ready
 
 
       # -----------------------------------------------------
-      # 12. Show logs if CI fails
+      # 14. Test products API
+      # -----------------------------------------------------
+      - name: Test products endpoint
+        run: curl -fsS http://localhost/api/products
+
+
+      # -----------------------------------------------------
+      # 15. Show logs if CI fails
       # -----------------------------------------------------
       - name: Show logs on failure
         if: failure()
@@ -135,7 +159,7 @@ jobs:
 
 
       # -----------------------------------------------------
-      # 13. Cleanup
+      # 16. Cleanup
       # -----------------------------------------------------
       - name: Cleanup
         if: always()
